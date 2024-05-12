@@ -1,7 +1,8 @@
 // @ts-nocheck
+import dotenv from "dotenv";
+import { Command } from "commander";
 import { readFileSync } from "fs";
 import { parse } from "csv-parse/sync";
-import dotenv from "dotenv";
 import { JWT } from "google-auth-library";
 import { GoogleSpreadsheet } from "google-spreadsheet";
 import {
@@ -10,7 +11,7 @@ import {
   groupBy,
   head,
   keys,
-  last,
+  // last,
   map,
   omit,
   pick,
@@ -23,21 +24,29 @@ import {
   values,
 } from "ramda";
 
+// ENV CONFIG
 dotenv.config();
 
-const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
+// COMMANDER CONFIGS
+const program = new Command();
+program.version("1.0.0");
+program.option("-f, --file <filePath>", "Specify the path to the file");
+program.option("-w, --write", "Write results to googlesheets");
+program.option("-p, --print", "Print results to console");
 
+// GOOGLE SHEETS CONFIG
+const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
 const serviceAccountAuth = new JWT({
   email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
   key: process.env.GOOGLE_PRIVATE_KEY.split(String.raw`\n`).join("\n"),
   scopes: SCOPES,
 });
-
 const doc = new GoogleSpreadsheet(
   "1bksMCq5oPixzHLeDXWuuU32RVUUNfjkCZWm-jzjQYDw",
   serviceAccountAuth
 );
 
+// HELPER FUNCTIONS
 function convertDateFormat(dateString) {
   // Split the input string into day, month, and year parts
   const [day, month, year] = dateString.split("-");
@@ -74,16 +83,27 @@ function getMonthName(monthNumber) {
 }
 
 async function main() {
-  await doc.loadInfo();
-  const sheet = doc.sheetsById[process.env.SHEET_ID];
-  const rows = await sheet.getRows();
+  // Get command line args
+  program.parse(process.argv);
+  const programOptions = program.opts();
+  const filePath = programOptions.file;
 
-  const jiraFile = readFileSync("./src/Grouped - [User daywise].csv", "utf-8");
-  const parsedJira = parse(jiraFile, {
+  if (!filePath) {
+    console.error(
+      "Error: You must provide a path to the file using -f or --file option."
+    );
+    process.exit(1);
+  }
+
+  // Parse CSV file
+  const jiraCSV = readFileSync(filePath, "utf-8");
+  const parsedJira = parse(jiraCSV, {
     columns: true,
     relax_quotes: true,
   });
-  const output = pipe(
+
+  // Create worklogs in Google Sheets format
+  const currentMonthWorklogs = pipe(
     map(
       pick([
         "Project Name",
@@ -135,14 +155,26 @@ async function main() {
     sortBy((obj) => obj.Dia.split("/")[0])
   )(parsedJira);
 
-  const currentMonth = getMonthName(Number(output[0].Dia.split("/")[1]));
-  const totalsRow = last(rows);
-  totalsRow.set("Dia", `Total ${currentMonth}:`);
-  output.push(totalsRow);
+  const currentMonth = getMonthName(
+    Number(currentMonthWorklogs[0].Dia.split("/")[1])
+  );
+  // TODO: Create totals row and format it properly
+  // const totalsRow = last(rows);
+  // totalsRow.set("Dia", `Total ${currentMonth}:`);
+  // currentMonthWorklogs.push(totalsRow);
 
-  console.log(output);
+  // Load Google Sheets document
+  await doc.loadInfo();
+  const sheet = doc.sheetsById[process.env.SHEET_ID];
+  // const rows = await sheet.getRows();
 
-  // await sheet.addRows(output);
+  if (programOptions.write) {
+    await sheet.addRows(currentMonthWorklogs);
+  }
+
+  if (programOptions.print) {
+    console.log(currentMonthWorklogs);
+  }
 }
 
 main();
